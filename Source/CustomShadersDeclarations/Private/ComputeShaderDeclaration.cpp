@@ -9,24 +9,15 @@
 #include "Modules/ModuleManager.h"
 
 #define NUM_THREADS_PER_GROUP_DIMENSION 32
+#define NUM_THREADS_FOR_Z_DIMENSION 1
 
-
-// Internal class thet holds the parameters and connects the HLSL Shader to the engine
 
 class FWhiteNoiseCS : public FGlobalShader
 {
 public:
 
-	//Declare this class as a global shader
 	DECLARE_GLOBAL_SHADER(FWhiteNoiseCS);
-
-	//Tells the engine that this shader uses a structure for its parameters
 	SHADER_USE_PARAMETER_STRUCT(FWhiteNoiseCS, FGlobalShader);
-
-
-	/// DECLARATION OF THE PARAMETER STRUCTURE
-	/// The parameters must match the parameters in the HLSL code
-	/// For each parameter, provide the C++ type, and the name (Same name used in HLSL code)
 
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_UAV(RWTexture2D<float4>, OutputTexture)
@@ -41,36 +32,69 @@ public:
 	END_SHADER_PARAMETER_STRUCT()
 
 public:
-
-	//Called by the engine to determine which permutations to compile for this shader
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
 	{
 		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
 	}
 
-	//Modifies the compilations environment of the shader
 	static inline void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
 	{
 		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
 
-		//We're using it here to add some preprocessor defines. That way we don't have to change both C++ and HLSL code when we change the value for NUM_THREADS_PER_GROUP_DIMENSION
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_X"), NUM_THREADS_PER_GROUP_DIMENSION);
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Y"), NUM_THREADS_PER_GROUP_DIMENSION);
-		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), 1);
+		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), NUM_THREADS_FOR_Z_DIMENSION);
+	}
+};
+
+class FComputeShaderEntryPS : public FGlobalShader
+{
+public:
+	DECLARE_GLOBAL_SHADER(FComputeShaderEntryPS);
+	SHADER_USE_PARAMETER_STRUCT(FComputeShaderEntryPS, FGlobalShader);
+
+	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
+		SHADER_PARAMETER_UAV(RWTexture2D<float4>, VelocityOutputTexture)	// Create UAV
+		SHADER_PARAMETER_TEXTURE(Texture2D<float4>, VelocityInput)			// Retrieve from the Cached Render Target
+		SHADER_PARAMETER_UAV(RWTexture2D<float4>, PositionOutputTexture)
+		SHADER_PARAMETER_TEXTURE(Texture2D<float4>, PositionInput)
+		SHADER_PARAMETER(FVector2f, TextureSize)
+		SHADER_PARAMETER(float, Range)
+		SHADER_PARAMETER(float, AlignScaler)
+		SHADER_PARAMETER(float, CohesionScaler)
+		SHADER_PARAMETER(float, SeparationScaler)
+		END_SHADER_PARAMETER_STRUCT()
+
+
+		// Used to determine which shader permutations to compile
+		static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters& Parameters)
+	{
+		return IsFeatureLevelSupported(Parameters.Platform, ERHIFeatureLevel::SM5);
+	}
+
+	// Modifies the compilation environment - this allows us to added custom defines to the shader compilation
+	static inline void ModifyCompilationEnvironment(const FGlobalShaderPermutationParameters& Parameters, FShaderCompilerEnvironment& OutEnvironment)
+	{
+		FGlobalShader::ModifyCompilationEnvironment(Parameters, OutEnvironment);
+
+		// Preprocessor defines. 
+		// This way there is no need to change both C++ and HLSL files if the value for NUM_THREADS_PER_GROUP_DIMENSION is changed
+		// the define outlined in the Char argument is set to the value in the Value argument
+		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_X"), NUM_THREADS_PER_GROUP_DIMENSION);
+		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Y"), NUM_THREADS_PER_GROUP_DIMENSION);
+		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), NUM_THREADS_FOR_Z_DIMENSION);
 	}
 };
 
 // This will tell the engine to create the shader and where the shader entry point is.
 //                        ShaderType              ShaderPath             Shader function name    Type
-IMPLEMENT_GLOBAL_SHADER(FWhiteNoiseCS, "/CustomShaders/WhiteNoiseCS.usf", "MainComputeShader", SF_Compute);
+IMPLEMENT_GLOBAL_SHADER(FComputeShaderEntryPS, "/CustomShaders/ComputeShader.usf", "MainComputeShader", SF_Compute);
 
 //Static members
 FComputeShaderManager* FComputeShaderManager::instance = nullptr;
 
-//Begin the execution of the compute shader each frame
-void FComputeShaderManager::BeginRendering()
+void FComputeShaderManager::BeginRendering(FBoidComputeShaderParameters& Parameters)
 {
-	// Check for an already initialized and valid handle
 	if (OnPostResolvedSceneColorHandle.IsValid())
 	{
 		return;
@@ -78,126 +102,201 @@ void FComputeShaderManager::BeginRendering()
 
 	bCachedParamsAreValid = false;
 
-	// Get the Renderer Module
 	const FName RendererModuleName("Renderer");
 	IRendererModule* RendererModule = FModuleManager::GetModulePtr<IRendererModule>(RendererModuleName);
 
-	// Check if the RendererModule pointer is valid
 	if (RendererModule)
 	{
-		// Safely add our callback to the module
 		OnPostResolvedSceneColorHandle = RendererModule->GetResolvedSceneColorCallbacks().AddRaw(this, &FComputeShaderManager::Execute_RenderThread);
 	}
+
+	UpdateParameters(Parameters);
 }
 
-//Stop the compute shader execution
 void FComputeShaderManager::EndRendering()
 {
-	// Check for a valid handle
 	if (!OnPostResolvedSceneColorHandle.IsValid())
 	{
 		return;
 	}
 
-	// Get the Renderer Module
 	const FName RendererModuleName("Renderer");
 	IRendererModule* RendererModule = FModuleManager::GetModulePtr<IRendererModule>(RendererModuleName);
 
-	// Check if the RendererModule pointer is valid
 	if (RendererModule)
 	{
-		// Safely remove our callback from the module
 		RendererModule->GetResolvedSceneColorCallbacks().Remove(OnPostResolvedSceneColorHandle);
 	}
 
 	OnPostResolvedSceneColorHandle.Reset();
 }
 
-
-//Update the parameters by a providing an instance of the Parameters structure used by the shader manager
-void FComputeShaderManager::UpdateParameters(FWhiteNoiseCSParameters& params)
+void FComputeShaderManager::UpdateParameters(FBoidComputeShaderParameters& Parameters)
 {
-	cachedParams = params;
+	CachedComputeShaderParameters = Parameters;
 	bCachedParamsAreValid = true;
 }
 
-
-
-/// Creates an instance of the shader type parameters structure and fills it using the cached shader manager parameter structure
-/// Gets a reference to the shader type from the global shaders map
-/// Dispatches the shader using the parameter structure instance
-
 void FComputeShaderManager::Execute_RenderThread(FRDGBuilder& GraphBuilder, const FSceneTextures& SceneTextures)
 {
+	check(IsInRenderingThread());
+
 	FRHICommandListImmediate& RHICmdList = GraphBuilder.RHICmdList;
 
-	// Basic check for cachedParams validity and the RenderTarget
-	if (!(bCachedParamsAreValid && cachedParams.RenderTarget))
+	// Create the VElocity output render target if it doesn't exist
+	if (!VelocityOutputRenderTarget.IsValid())
+	{
+		FPooledRenderTargetDesc VelocityComputeShaderOutputDesc(
+			FPooledRenderTargetDesc::Create2DDesc(
+				CachedComputeShaderParameters.CachedRenderTargetSize,
+				CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI->GetFormat(),
+				FClearValueBinding::Black,
+				TexCreate_None,
+				TexCreate_ShaderResource | TexCreate_UAV,
+				false
+			)
+		);
+
+		VelocityComputeShaderOutputDesc.DebugName = TEXT("ShaderPlugin_VelocityOutput");
+		GRenderTargetPool.FindFreeElement(RHICmdList, VelocityComputeShaderOutputDesc, VelocityOutputRenderTarget, TEXT("ShaderPlugin_VelocityOutput"));
+
+		if (!VelocityOutputRenderTarget.IsValid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("VelocityOutputRenderTarget is not valid"));
+			return;
+		}
+	}
+
+	// Create the Position output render target if it doesn't exist
+	if (!PositionOutputRenderTarget.IsValid())
+	{
+		FPooledRenderTargetDesc PositionComputeShaderOutputDesc(
+			FPooledRenderTargetDesc::Create2DDesc(
+				CachedComputeShaderParameters.CachedRenderTargetSize,
+				CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI->GetFormat(),
+				FClearValueBinding::Black,
+				TexCreate_None,
+				TexCreate_ShaderResource | TexCreate_UAV,
+				false
+			)
+		);
+
+		PositionComputeShaderOutputDesc.DebugName = TEXT("ShaderPlugin_PositionOutput");
+		GRenderTargetPool.FindFreeElement(RHICmdList, PositionComputeShaderOutputDesc, PositionOutputRenderTarget, TEXT("ShaderPlugin_PositionOutput"));
+
+		if (!PositionOutputRenderTarget.IsValid())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("PositionOutputRenderTarget is not valid"));
+			return;
+		}
+	}
+
+	if (!(bCachedParamsAreValid && CachedComputeShaderParameters.VelocityRenderTarget && CachedComputeShaderParameters.PositionRenderTarget))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Invalid cached parameters or render target."));
 		return;
 	}
 
-	// Render Thread Assertion
-	check(IsInRenderingThread());
+	FShaderExecutionParameters ShaderExecutionParameters(RHICmdList, CachedComputeShaderParameters);
+	ShaderExecutionParameters.VelocityOutputRenderTarget = VelocityOutputRenderTarget;
+	ShaderExecutionParameters.PositionOutputRenderTarget = PositionOutputRenderTarget;
 
-	// Check and initialize the ComputeShaderOutput
-	if (!ComputeShaderOutput.IsValid())
+	Draw_RenderThread(ShaderExecutionParameters);
+}
+
+void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& ExecutionParameters)
+{
+	if (ExecutionParameters.VelocityOutputRenderTarget == nullptr)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("ComputeShaderOutput is not valid. Initializing..."));
-		FPooledRenderTargetDesc ComputeShaderOutputDesc(FPooledRenderTargetDesc::Create2DDesc(cachedParams.GetRenderTargetSize(), cachedParams.RenderTarget->GetRenderTargetResource()->TextureRHI->GetFormat(), FClearValueBinding::None, TexCreate_None, TexCreate_ShaderResource | TexCreate_UAV, false));
-		ComputeShaderOutputDesc.DebugName = TEXT("WhiteNoiseCS_Output_RenderTarget");
-		GRenderTargetPool.FindFreeElement(RHICmdList, ComputeShaderOutputDesc, ComputeShaderOutput, TEXT("WhiteNoiseCS_Output_RenderTarget"));
+		UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - Velocity Render Target is null"));
 
-		// Double check after initialization
-		if (!ComputeShaderOutput.IsValid())
+		if (ExecutionParameters.PositionOutputRenderTarget == nullptr)
 		{
-			UE_LOG(LogTemp, Error, TEXT("Failed to initialize ComputeShaderOutput."));
+			UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - Position Render Target is null"));
 			return;
 		}
+		return;
 	}
 
-	// Specify the resource transition
+
+	// Unbind the render targets
 	FRHITransitionInfo TransitionInfo;
-	TransitionInfo.Resource = RHICmdList.CreateUnorderedAccessView(ComputeShaderOutput->GetRHI());
+	TransitionInfo.Resource = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.VelocityOutputRenderTarget->GetRHI());
 	TransitionInfo.Type = FRHITransitionInfo::EType::UAV;
 	TransitionInfo.AccessBefore = ERHIAccess::Unknown;
 	TransitionInfo.AccessAfter = ERHIAccess::UAVCompute;
+	ExecutionParameters.RHICmdList.Transition(TransitionInfo);
 
-	RHICmdList.Transition(TransitionInfo);
+	TransitionInfo.Resource = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
+	ExecutionParameters.RHICmdList.Transition(TransitionInfo);
 
-	// Fill the shader parameters structure
-	FWhiteNoiseCS::FParameters PassParameters;
-	PassParameters.OutputTexture = RHICmdList.CreateUnorderedAccessView(ComputeShaderOutput->GetRHI());
-	if (!PassParameters.OutputTexture)
+
+
+	// Create pass parameters for the compute shader
+	FComputeShaderEntryPS::FParameters PassParameters;
+	PassParameters.VelocityOutputTexture = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.VelocityOutputRenderTarget->GetRHI());
+	PassParameters.VelocityInput = ExecutionParameters.CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI;
+	PassParameters.PositionOutputTexture = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
+	PassParameters.PositionInput = ExecutionParameters.CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI;
+
+	// Check if any render targets are null
+	if
+		(
+			PassParameters.VelocityOutputTexture == nullptr ||
+			PassParameters.VelocityInput == nullptr ||
+			PassParameters.PositionOutputTexture == nullptr ||
+			PassParameters.PositionInput == nullptr
+			)
 	{
-		UE_LOG(LogTemp, Error, TEXT("Failed to create UAV for ComputeShaderOutput."));
+		UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - PassParameters Render Targets are null"));
 		return;
 	}
 
-	PassParameters.Dimensions = FVector2f(cachedParams.GetRenderTargetSize().X, cachedParams.GetRenderTargetSize().Y);
-	PassParameters.TimeStamp = cachedParams.TimeStamp;
+	// Complete the pass parameters
+	PassParameters.TextureSize = FVector2f(
+		ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.X,
+		ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.Y
+	);
 
-	// Get a reference to our shader type
-	TShaderMapRef<FWhiteNoiseCS> whiteNoiseCS(GetGlobalShaderMap(GMaxRHIFeatureLevel));
-	if (!whiteNoiseCS.IsValid())
-	{
-		UE_LOG(LogTemp, Error, TEXT("Failed to get valid shader reference."));
-		return;
-	}
+	PassParameters.Range = ExecutionParameters.CachedComputeShaderParameters.Range;
+	PassParameters.AlignScaler = ExecutionParameters.CachedComputeShaderParameters.AlignScaler;
+	PassParameters.CohesionScaler = ExecutionParameters.CachedComputeShaderParameters.CohesionScaler;
+	PassParameters.SeparationScaler = ExecutionParameters.CachedComputeShaderParameters.SeparationScaler;
+
+
 
 	// Dispatch the compute shader
-	FComputeShaderUtils::Dispatch(RHICmdList, whiteNoiseCS, PassParameters,
-		FIntVector(FMath::DivideAndRoundUp(cachedParams.GetRenderTargetSize().X, NUM_THREADS_PER_GROUP_DIMENSION),
-			FMath::DivideAndRoundUp(cachedParams.GetRenderTargetSize().Y, NUM_THREADS_PER_GROUP_DIMENSION), 1));
+	TShaderMapRef<FComputeShaderEntryPS> ComputeShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 
-	// Check validity before copying texture
-	if (!ComputeShaderOutput->GetRHI() || !cachedParams.RenderTarget->GetRenderTargetResource() || !cachedParams.RenderTarget->GetRenderTargetResource()->TextureRHI)
-	{
-		UE_LOG(LogTemp, Error, TEXT("Invalid resources for texture copy."));
-		return;
-	}
+	FComputeShaderUtils::Dispatch(
+		ExecutionParameters.RHICmdList,
+		ComputeShader,
+		PassParameters,
+		FIntVector(
+			FMath::DivideAndRoundUp(
+				ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.X,
+				NUM_THREADS_PER_GROUP_DIMENSION
+			),
+			FMath::DivideAndRoundUp(
+				ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.Y,
+				NUM_THREADS_PER_GROUP_DIMENSION
+			),
+			NUM_THREADS_FOR_Z_DIMENSION
+		)
+	);
 
-	// Copy shader's output to the render target provided by the client
-	RHICmdList.CopyTexture(ComputeShaderOutput->GetRHI(), cachedParams.RenderTarget->GetRenderTargetResource()->TextureRHI, FRHICopyTextureInfo());
+
+
+	// Copy the textures from the compute shader to the render targets
+	ExecutionParameters.RHICmdList.CopyTexture(
+		ExecutionParameters.VelocityOutputRenderTarget->GetRHI(),
+		ExecutionParameters.CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI,
+		FRHICopyTextureInfo()
+	);
+
+	ExecutionParameters.RHICmdList.CopyTexture(
+		ExecutionParameters.PositionOutputRenderTarget->GetRHI(),
+		ExecutionParameters.CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI,
+		FRHICopyTextureInfo()
+	);
 }
