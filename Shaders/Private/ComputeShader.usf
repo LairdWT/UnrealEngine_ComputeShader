@@ -1,186 +1,134 @@
 #include "/Engine/Public/Platform.ush"
 
 RWTexture2D<float4> VelocityOutputTexture;
+Texture2D<float4> VelocityInput;
 RWTexture2D<float4> PositionOutputTexture;
+Texture2D<float4> PositionInput;
 float2 TextureSize;
 float Range;
 float AlignScaler;
 float CohesionScaler;
 float SeparationScaler;
 
-[numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
-void MainComputeShader(uint3 ThreadId : SV_DispatchThreadID)
+float DE(float3 pos, out int iterations)
 {
-    // Gradient color based on the ThreadId's position
-    float4 gradientColor = float4(ThreadId.x / TextureSize.x, ThreadId.y / TextureSize.y, 0.5, 1.0);
+    float powerTimeModulation = 8.0 + 3.0 * sin(0.25 * Range);
+    const float POWER = powerTimeModulation;
+    float3 z = pos;
+    float dr = 1.0;
+    float r = 0.0;
+    const int MAX_ITERATIONS = 128;
 
-    VelocityOutputTexture[ThreadId.xy] = gradientColor;
-    PositionOutputTexture[ThreadId.xy] = gradientColor;
+    for(int i = 0; i < MAX_ITERATIONS; i++)
+    {
+        r = length(z);
+        if (r > 2.0) 
+        {
+            iterations = i;
+            return 0.5 * log(r) * r / dr;
+        }
+
+        float theta = acos(z.z / r);
+        float phi = atan2(z.y, z.x);
+        dr = pow(r, POWER-1.0) * POWER * dr + 1.0;
+
+        float zr = pow(r, POWER);
+        theta *= POWER;
+        phi *= POWER;
+
+        z = zr * float3(sin(theta)*cos(phi), sin(phi)*sin(theta), cos(theta));
+        z += pos;
+        z += sin(0.25 * Range) * 0.005;
+    }
+
+    iterations = MAX_ITERATIONS;
+    return 0.5 * log(r) * r / dr;
 }
 
-/*
-
-float4 rangeChecker(float4 currentPos, float4 currentVel)
+float AO(float3 pos, float3 nor)
 {
-    float4 finalVelocity = currentVel;
-    float HalfRange = Range / 2;
+    float occ = 0.0;
+    float sca = 1.0;
+    const float CONTRAST_FACTOR = 3.0;
 
-    if (currentPos.x >= HalfRange)
+    for (int i = 0; i < 32; i++)
     {
-        if (finalVelocity.x > 0)
-        {
-            finalVelocity.x *= -1;
-        }
+        float hr = 0.01 + 0.05 * float(i) / 4.0;
+        float3 aopos = nor * hr + pos;
+        int it;
+        float dd = DE(aopos, it);
+        occ += -(dd - hr) * sca;
+        sca *= 0.8;
     }
-    else if (currentPos.x <= -HalfRange)
-    {
-        if (finalVelocity.x < 0)
-        {
-            finalVelocity.x *= -1;
-        }
-    }
-
-    if (currentPos.y >= HalfRange)
-    {
-        if (finalVelocity.y > 0)
-        {
-            finalVelocity.y *= -1;
-        }
-    }
-    else if (currentPos.y <= -HalfRange)
-    {
-        if (finalVelocity.y < 0)
-        {
-            finalVelocity.y *= -1;
-        }
-    }
-
-    if (currentPos.z >= HalfRange)
-    {
-        if (finalVelocity.z > 0)
-        {
-            finalVelocity.z *= -1;
-        }
-    }
-    else if (currentPos.z <= -HalfRange)
-    {
-        if (finalVelocity.z < 0)
-        {
-            finalVelocity.z *= -1;
-        }
-    }
-    return finalVelocity;
+    return clamp(1.0 - occ * CONTRAST_FACTOR, 0.01, 1.0);
 }
 
 
-
-
-float3 getAcceleration(uint3 ThreadId, float3 currentPos, float3 currentVel)
+float3 GetColor(float ratio)
 {
-    
-    float maxForce = 0.01;
-    float maxSpeed = 5;
-    //
-    float alignDist = 300;
-    float3 alignTotalVelocity = float3(0, 0, 0);
-    float3 alignAcc = float3(0, 0, 0);
-    float alignNum = 0.0;
-    //
-    float cohesionDist = 600;
-    float3 cohesionTotalVelocity = float3(0, 0, 0);
-    float3 cohesionAcc = float3(0, 0, 0);
-    float cohesionNum = 0.0;
-    //
-    float separationDist = 200;
-    float3 separationTotalVelocity = float3(0, 0, 0);
-    float3 separationAcc = float3(0, 0, 0);
-    float separationNum = 0.0;
-    
-    
-    
-    for (int y = 0; y < int(TextureSize.y); y++)
-    {
-        for (int x = 0; x < int(TextureSize.x); x++)
-        {
+    float3 colors[3];
+    colors[0] = float3(0.7, 0.1, 0.1);  // Red
+    colors[1] = float3(0.1, 0.7, 0.1);  // Green
+    colors[2] = float3(0.1, 0.1, 0.7);  // Blue
 
-            float3 neighborPos = PositionInput.Load(int3(x, y, 0)).xyz;
-            float distance = length(currentPos - neighborPos);
-            if (x != ThreadId.x && y != ThreadId.y)
-            {
-               
-                if (distance < cohesionDist)
-                {
-                    cohesionTotalVelocity += neighborPos;
-                    cohesionNum++;
-                    if (distance < alignDist)
-                    {
-                        alignTotalVelocity += VelocityInput.Load(int3(x, y, 0)).xyz;
-                        alignNum++;
-                        if (distance < separationDist)
-                        {
-                            float3 diff = currentPos - neighborPos;
-                            diff = normalize(diff);
-                            diff /= distance;
-                            separationTotalVelocity += diff;
-                            separationNum++;
-                        }
-                    }
-                    
-                }
-                   
-            }
-        }
-    }
-    if (alignNum > 0.0)
-    {
-        alignTotalVelocity /= alignNum;
-        alignTotalVelocity = normalize(alignTotalVelocity) * maxSpeed;
-        alignAcc = alignTotalVelocity - currentVel;
-        if (length(alignAcc) > maxForce)
-        {
-            alignAcc = normalize(alignAcc) * maxForce;
-        }
-    }
-    
-    if (cohesionNum > 0.0)
-    {
-        cohesionTotalVelocity /= cohesionNum;
-        cohesionTotalVelocity = cohesionTotalVelocity - currentPos;
-        cohesionTotalVelocity = normalize(cohesionTotalVelocity) * maxSpeed;
-        cohesionAcc = cohesionTotalVelocity - currentVel;
-        if (length(cohesionAcc) > maxForce)
-        {
-            cohesionAcc = normalize(cohesionAcc) * maxForce;
-        }
-    }
-    if (separationNum > 0.0)
-    {
-        separationTotalVelocity /= separationNum;
-        separationTotalVelocity = normalize(separationTotalVelocity) * maxSpeed;
-        separationAcc = separationTotalVelocity - currentVel;
-        if (length(separationAcc) > maxForce)
-        {
-            separationAcc = normalize(separationAcc) * maxForce;
-        }
-    }
-    return alignAcc * AlignScaler + cohesionAcc * CohesionScaler + separationAcc * SeparationScaler;
+    int idx = int(ratio + sin(0.1 * Range));
+    float fracted = frac(ratio);
 
+    float3 colorA = colors[idx % 3];
+    float3 colorB = colors[(idx + 1) % 3];
+    
+    return lerp(colorA, colorB, fracted);
 }
 
 [numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
-void MainComputeShader(uint3 ThreadId : SV_DispatchThreadID)
+void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
 {
+    float time = 2.0 * 3.14159265359 * frac(Range * 0.025);  // Convert the fractional part of Range into an angle in radians
+    float3 cameraPos = float3(4.0 * sin(time), 2.0, 4.0 * cos(time));
+    float3 targetPos = float3(0.0, 0.0, 0.0);
+    float3 upVector = float3(0.0, 1.0, 0.0);
 
+    float3 forward = normalize(targetPos - cameraPos);
+    float3 right = cross(upVector, forward);
+    float3 up = cross(forward, right);
 
-    float4 velocity = VelocityInput.Load(int3(ThreadId.x, ThreadId.y, 0));
-    float4 position = PositionInput.Load(int3(ThreadId.x, ThreadId.y, 0));
-   
-    velocity = rangeChecker(position, velocity);
-    velocity.xyz += getAcceleration(ThreadId, position.xyz, velocity.xyz);
-   
+    float3 rayDir = normalize(forward + 
+                    (DTid.x / TextureSize.x - 0.5) * right + 
+                    (DTid.y / TextureSize.y - 0.5) * up);
 
-    VelocityOutputTexture[ThreadId.xy] = velocity;
-    PositionOutputTexture[ThreadId.xy] = position + velocity;
+    const int MAX_RAY_STEPS = 128;
+    const float MIN_DIST = 0.005;
+    const float MAX_DIST = 100.0;
+    float depth = 0.1;
+
+    for(int i = 0; i < MAX_RAY_STEPS; i++)
+    {
+        float3 p = cameraPos + depth * rayDir;
+        int iters;
+        float d = DE(p, iters);
+
+        if (d < MIN_DIST)
+        {
+            float3 normal = normalize(float3(
+                DE(p + float3(0.01, 0.0, 0.0), iters) - DE(p - float3(0.01, 0.0, 0.0), iters),
+                DE(p + float3(0.0, 0.01, 0.0), iters) - DE(p - float3(0.0, 0.01, 0.0), iters),
+                DE(p + float3(0.0, 0.0, 0.01), iters) - DE(p - float3(0.0, 0.0, 0.01), iters)
+            ));
+
+            float ratio = (float(iters) + depth * 0.1) / 200.0; 
+            float3 color = AO(p, normal);
+            VelocityOutputTexture[DTid.xy] = float4(color, 1.0);
+            return;
+        }
+
+        depth += d;
+
+        if (depth >= MAX_DIST)
+        {
+            VelocityOutputTexture[DTid.xy] = float4(0.05, 0.10, 0.10, 1.0);
+            return;
+        }
+    }
+
+    VelocityOutputTexture[DTid.xy] = float4(0.05, 0.10, 0.10, 1.0);
 }
-
-*/

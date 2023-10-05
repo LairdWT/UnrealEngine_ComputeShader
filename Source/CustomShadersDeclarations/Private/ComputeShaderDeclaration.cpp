@@ -150,7 +150,7 @@ void FComputeShaderManager::Execute_RenderThread(FRDGBuilder& GraphBuilder, cons
 			FPooledRenderTargetDesc::Create2DDesc(
 				CachedComputeShaderParameters.CachedRenderTargetSize,
 				CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI->GetFormat(),
-				FClearValueBinding::Black,
+				FClearValueBinding::None,
 				TexCreate_None,
 				TexCreate_ShaderResource | TexCreate_UAV,
 				false
@@ -174,7 +174,7 @@ void FComputeShaderManager::Execute_RenderThread(FRDGBuilder& GraphBuilder, cons
 			FPooledRenderTargetDesc::Create2DDesc(
 				CachedComputeShaderParameters.CachedRenderTargetSize,
 				CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI->GetFormat(),
-				FClearValueBinding::Black,
+				FClearValueBinding::None,
 				TexCreate_None,
 				TexCreate_ShaderResource | TexCreate_UAV,
 				false
@@ -206,18 +206,6 @@ void FComputeShaderManager::Execute_RenderThread(FRDGBuilder& GraphBuilder, cons
 
 void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& ExecutionParameters)
 {
-	if (ExecutionParameters.VelocityOutputRenderTarget == nullptr)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - Velocity Render Target is null"));
-
-		if (ExecutionParameters.PositionOutputRenderTarget == nullptr)
-		{
-			UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - Position Render Target is null"));
-			return;
-		}
-		return;
-	}
-
 
 	// Unbind the render targets
 	FRHITransitionInfo TransitionInfo;
@@ -227,8 +215,8 @@ void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& 
 	TransitionInfo.AccessAfter = ERHIAccess::UAVCompute;
 	ExecutionParameters.RHICmdList.Transition(TransitionInfo);
 
-	TransitionInfo.Resource = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
-	ExecutionParameters.RHICmdList.Transition(TransitionInfo);
+	// TransitionInfo.Resource = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
+	// ExecutionParameters.RHICmdList.Transition(TransitionInfo);
 
 
 
@@ -236,17 +224,15 @@ void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& 
 	FComputeShaderEntryPS::FParameters PassParameters;
 	PassParameters.VelocityOutputTexture = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.VelocityOutputRenderTarget->GetRHI());
 	PassParameters.VelocityInput = ExecutionParameters.CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI;
-	PassParameters.PositionOutputTexture = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
-	PassParameters.PositionInput = ExecutionParameters.CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI;
+	// PassParameters.PositionOutputTexture = ExecutionParameters.RHICmdList.CreateUnorderedAccessView(ExecutionParameters.PositionOutputRenderTarget->GetRHI());
+	// PassParameters.PositionInput = ExecutionParameters.CachedComputeShaderParameters.PositionRenderTarget->GetRenderTargetResource()->TextureRHI;
 
 	// Check if any render targets are null
 	if
-		(
+	(
 			PassParameters.VelocityOutputTexture == nullptr ||
-			PassParameters.VelocityInput == nullptr ||
-			PassParameters.PositionOutputTexture == nullptr ||
-			PassParameters.PositionInput == nullptr
-			)
+			PassParameters.VelocityInput == nullptr
+	)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("FComputeShaderEntry::RunComputeShader_RenderThread - PassParameters Render Targets are null"));
 		return;
@@ -293,6 +279,8 @@ void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& 
 		ExecutionParameters.CachedComputeShaderParameters.VelocityRenderTarget->GetRenderTargetResource()->TextureRHI,
 		FRHICopyTextureInfo()
 	);
+
+	return;
 
 	ExecutionParameters.RHICmdList.CopyTexture(
 		ExecutionParameters.PositionOutputRenderTarget->GetRHI(),

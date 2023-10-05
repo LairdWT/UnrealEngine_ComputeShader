@@ -4,7 +4,7 @@
 #include "CustomShadersDeclarations/Private/ComputeShaderDeclaration.h"
 
 
-AWhiteNoiseConsumer::AWhiteNoiseConsumer()
+AComputeShaderAgent::AComputeShaderAgent()
 {
 	PrimaryActorTick.bCanEverTick = true;
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -13,7 +13,7 @@ AWhiteNoiseConsumer::AWhiteNoiseConsumer()
 	static_mesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("Static Mesh"));
 }
 
-void AWhiteNoiseConsumer::BeginPlay()
+void AComputeShaderAgent::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -25,23 +25,24 @@ void AWhiteNoiseConsumer::BeginPlay()
 
 	FComputeShaderManager::Get()->BeginRendering(Parameters);
 
-
 	// Assuming that the static mesh is already using the material that we're targeting, we create an instance and assign it to it
 	// UMaterialInstanceDynamic* MID = static_mesh->CreateAndSetMaterialInstanceDynamic(0);
 	// MID->SetTextureParameterValue("VelocityRenderTarget", (UTexture*)VelocityRenderTarget);
 	// MID->SetTextureParameterValue("PositionRenderTarget", (UTexture*)PositionRenderTarget);
 }
 
-void AWhiteNoiseConsumer::BeginDestroy()
+void AComputeShaderAgent::BeginDestroy()
 {
 	FComputeShaderManager::Get()->EndRendering();
 	Super::BeginDestroy();
 
 }
 
-void AWhiteNoiseConsumer::Tick(float DeltaTime)
+void AComputeShaderAgent::Tick(float DeltaTime)
 {
 	Super::Tick(DeltaTime);
+
+	Range = Range + DeltaTime;
 
 	FBoidComputeShaderParameters Parameters(VelocityRenderTarget, PositionRenderTarget);
 	Parameters.Range = Range;
@@ -52,7 +53,7 @@ void AWhiteNoiseConsumer::Tick(float DeltaTime)
 	FComputeShaderManager::Get()->UpdateParameters(Parameters);
 }
 
-void AWhiteNoiseConsumer::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
+void AComputeShaderAgent::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
 }

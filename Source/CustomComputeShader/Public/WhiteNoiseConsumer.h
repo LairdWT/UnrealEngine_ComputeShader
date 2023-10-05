@@ -5,13 +5,13 @@
 #include "WhiteNoiseConsumer.generated.h"
 
 UCLASS()
-class CUSTOMCOMPUTESHADER_API AWhiteNoiseConsumer : public APawn
+class CUSTOMCOMPUTESHADER_API AComputeShaderAgent : public APawn
 {
 	GENERATED_BODY()
 
 public:
 
-	AWhiteNoiseConsumer();
+	AComputeShaderAgent();
 
 	virtual void Tick(float DeltaTime) override;
 
@@ -31,9 +31,16 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderDemo")
 	class UTextureRenderTarget2D* PositionRenderTarget;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderDemo | Flock")
 	float Range{ 1.0f };
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderDemo | Flock")
 	float AlignScaler{ 1.0f };
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderDemo | Flock")
 	float CohesionScaler{ 1.0f };
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ShaderDemo | Flock")
 	float SeparationScaler{ 1.0f };
 
 protected:
