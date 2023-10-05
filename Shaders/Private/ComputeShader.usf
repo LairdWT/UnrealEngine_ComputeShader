@@ -10,29 +10,30 @@ float AlignScaler;
 float CohesionScaler;
 float SeparationScaler;
 
-float3 HSVtoRGB(float h, float s, float v)
+float3 HSVtoRGB(float h, float s, float v) 
 {
     float c = v * s;
-    float x = c * (1.0 - abs(fmod(h / 60.0, 2.0) - 1.0));
-    float m = v - c;
+    float hh = h / 60.0;
+    float x = c * (1.0 - abs(fmod(hh, 2.0) - 1.0));
+    
+    float3 res = float3(0, 0, 0);
 
-    float3 col;
+    if (hh < 1.0) res = float3(c, x, 0);
+    else if (hh < 2.0) res = float3(x, c, 0);
+    else if (hh < 3.0) res = float3(0, c, x);
+    else if (hh < 4.0) res = float3(0, x, c);
+    else if (hh < 5.0) res = float3(x, 0, c);
+    else res = float3(c, 0, x);
 
-    if (0 <= h && h < 60) {
-        col = float3(c, x, 0);
-    } else if (60 <= h && h < 120) {
-        col = float3(x, c, 0);
-    } else if (120 <= h && h < 180) {
-        col = float3(0, c, x);
-    } else if (180 <= h && h < 240) {
-        col = float3(0, x, c);
-    } else if (240 <= h && h < 300) {
-        col = float3(x, 0, c);
-    } else {
-        col = float3(c, 0, x);
-    }
+    return res + (v - c);
+}
 
-    return col + m;
+float3 GetColor(float minDistToTrap, int iters)
+{
+    float normalizedDist = 1.0 - clamp(minDistToTrap, 0.0, 1.0);
+    float hue = fmod(iters + normalizedDist * 360.0, 360.0);
+    float saturation = abs(sin(iters * 0.1)) + 0.5;
+    return float3 (hue, normalizedDist, saturation); // HSVtoRGB(hue, saturation, normalizedDist);
 }
 
 float3 RepeatDomain(float3 pos, float repeatSize)
@@ -92,7 +93,7 @@ float AO(float3 pos, float3 nor)
     float3 dummyLastZ; 
     float dummyMinDistToTrap; 
 
-    for (int i = 0; i < 32; i++)
+    for (int i = 0; i < 16; i++)
     {
         float hr = 0.01 + 0.05 * float(i) / 4.0;
         float3 aopos = nor * hr + pos;
@@ -104,18 +105,10 @@ float AO(float3 pos, float3 nor)
     return clamp(1.0 - occ * CONTRAST_FACTOR, 0.05, 1.0);
 }
 
-float3 GetColor(float minDistToTrap, int iters)
-{
-    float normalizedDist = 1.0 - clamp(minDistToTrap, 0.0, 1.0);
-    float hue = fmod(iters + normalizedDist * 360.0, 360.0);
-    float saturation = abs(sin(iters * 0.1)) + 0.5;
-    return HSVtoRGB(hue, saturation, normalizedDist);
-}
-
 [numthreads(THREADGROUPSIZE_X, THREADGROUPSIZE_Y, THREADGROUPSIZE_Z)]
 void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
 {
-    float time = 2.0 * 3.14159265359 * frac(Range * 0.025);
+    float time = 2.0 * 3.14159265359 * frac(AlignScaler * 0.025);
     float3 cameraPos = float3(4.0 * sin(time), 2.0, 4.0 * cos(time));
     float3 targetPos = float3(0.0, 0.0, 0.0);
     float3 upVector = float3(0.0, 1.0, 0.0);
@@ -142,7 +135,7 @@ void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
         int iters;
         float d = DE(p, iters, lastZ, minDistToTrap);
 
-        if (d < 0.25 * MIN_DIST * depth)  // Adaptive stopping criteria
+        if (d < 0.5 * MIN_DIST * depth)
         {
             float3 normal = normalize(float3(
                 DE(p + float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap) - DE(p - float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap),
@@ -151,7 +144,10 @@ void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
             ));
 
             float3 color = 1 - (GetColor(minDistToTrap, iters));
-            color *= AO(p, normal);
+            float aocolor = AO(p, normal);
+            color *= float3(0.0, 0.0, (1 - aocolor));
+            color += float3(0.02, 0.5, 0.0) * aocolor;
+
             VelocityOutputTexture[DTid.xy] = float4(color, 1.0);
             return;
         }
