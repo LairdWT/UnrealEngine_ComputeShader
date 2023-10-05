@@ -117,49 +117,60 @@ void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
     float3 right = cross(upVector, forward);
     float3 up = cross(forward, right);
 
-    float3 rayDir = normalize(forward + 
-                    (DTid.x / TextureSize.x - 0.5) * right + 
-                    (DTid.y / TextureSize.y - 0.5) * up);
-
-    const int MAX_RAY_STEPS = 128;
-    const float MIN_DIST = 0.0025;
-    const float MAX_DIST = 512.0;
-    float depth = 0.1;
-
-    float minDistToTrap = 100.0; 
-    float3 lastZ;
-
-    for(int i = 0; i < MAX_RAY_STEPS; i++)
+    uint2 currentPixelBase = uint2(DTid.x * PIXELS_PER_THREAD, DTid.y * PIXELS_PER_THREAD);
+    for(uint offsetY = 0; offsetY < PIXELS_PER_THREAD; offsetY++)
     {
-        float3 p = cameraPos + depth * rayDir;
-        int iters;
-        float d = DE(p, iters, lastZ, minDistToTrap);
-
-        if (d < 0.5 * MIN_DIST * depth)
+        for(uint offsetX = 0; offsetX < PIXELS_PER_THREAD; offsetX++)
         {
-            float3 normal = normalize(float3(
-                DE(p + float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap) - DE(p - float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap),
-                DE(p + float3(0.0, 0.01, 0.0), iters, lastZ, minDistToTrap) - DE(p - float3(0.0, 0.01, 0.0), iters, lastZ, minDistToTrap),
-                DE(p + float3(0.0, 0.0, 0.01), iters, lastZ, minDistToTrap) - DE(p - float3(0.0, 0.0, 0.01), iters, lastZ, minDistToTrap)
-            ));
+            uint2 currentPixel = uint2(currentPixelBase.x + offsetX, currentPixelBase.y + offsetY);
+            if(currentPixel.x >= TextureSize.x || currentPixel.y >= TextureSize.y)
+            {
+                continue;
+            }
+            
+            float3 rayDir = normalize(forward + (currentPixel.x / TextureSize.x - 0.5) * right + (currentPixel.y / TextureSize.y - 0.5) * up);
 
-            float3 color = 1 - (GetColor(minDistToTrap, iters));
-            float aocolor = AO(p, normal);
-            color *= float3(0.0, 0.0, (1 - aocolor));
-            color += float3(0.02, 0.5, 0.0) * aocolor;
+            const int MAX_RAY_STEPS = 128;
+            const float MIN_DIST = 0.0025;
+            const float MAX_DIST = 512.0;
+            float depth = 0.1;
+            float minDistToTrap = 100.0; 
+            float3 lastZ;
 
-            VelocityOutputTexture[DTid.xy] = float4(color, 1.0);
-            return;
-        }
+            for(int i = 0; i < MAX_RAY_STEPS; i++)
+            {
+                float3 p = cameraPos + depth * rayDir;
+                int iters;
+                float d = DE(p, iters, lastZ, minDistToTrap);
 
-        depth += d;
+                if (d < 0.5 * MIN_DIST * depth)
+                {
+                    float3 normal = normalize(float3(
+                        DE(p + float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap) - DE(p - float3(0.01, 0.0, 0.0), iters, lastZ, minDistToTrap),
+                        DE(p + float3(0.0, 0.01, 0.0), iters, lastZ, minDistToTrap) - DE(p - float3(0.0, 0.01, 0.0), iters, lastZ, minDistToTrap),
+                        DE(p + float3(0.0, 0.0, 0.01), iters, lastZ, minDistToTrap) - DE(p - float3(0.0, 0.0, 0.01), iters, lastZ, minDistToTrap)
+                    ));
 
-        if (depth >= MAX_DIST)
-        {
-            VelocityOutputTexture[DTid.xy] = float4(0.05, 0.10, 0.10, 1.0);
-            return;
-        }
-    }
+                    float3 color = 1 - (GetColor(minDistToTrap, iters));
+                    float aocolor = AO(p, normal);
+                    color *= float3(0.0, 0.0, (1 - aocolor));
+                    color += float3(0.02, 0.5, 0.0) * aocolor;
 
-    VelocityOutputTexture[DTid.xy] = float4(0.05, 0.10, 0.10, 1.0);
+                    VelocityOutputTexture[currentPixel] = float4(color, 1.0);
+                    break;
+                }
+                else if (depth >= MAX_DIST)
+                {
+                    VelocityOutputTexture[currentPixel] = float4(0.05, 0.10, 0.10, 1.0);
+                    break;
+                }
+                
+                depth += d;
+            }
+            if (depth >= MAX_DIST)
+            {
+                VelocityOutputTexture[currentPixel] = float4(0.05, 0.10, 0.10, 1.0);
+            }
+        } 
+    } 
 }

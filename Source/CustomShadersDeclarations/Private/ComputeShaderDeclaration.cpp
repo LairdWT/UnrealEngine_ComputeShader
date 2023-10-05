@@ -8,7 +8,9 @@
 
 #include "Modules/ModuleManager.h"
 
-#define NUM_THREADS_PER_GROUP_DIMENSION 32
+#define RT_SIZE 2048
+#define NUM_THREADS_PER_GROUP_DIMENSION (RT_SIZE / 256)
+#define PIXELS_PER_THREAD 8
 #define NUM_THREADS_FOR_Z_DIMENSION 1
 
 
@@ -44,6 +46,7 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_X"), NUM_THREADS_PER_GROUP_DIMENSION);
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Y"), NUM_THREADS_PER_GROUP_DIMENSION);
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), NUM_THREADS_FOR_Z_DIMENSION);
+		OutEnvironment.SetDefine(TEXT("PIXELS_PER_THREAD"), PIXELS_PER_THREAD);
 	}
 };
 
@@ -83,6 +86,7 @@ public:
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_X"), NUM_THREADS_PER_GROUP_DIMENSION);
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Y"), NUM_THREADS_PER_GROUP_DIMENSION);
 		OutEnvironment.SetDefine(TEXT("THREADGROUPSIZE_Z"), NUM_THREADS_FOR_Z_DIMENSION);
+		OutEnvironment.SetDefine(TEXT("PIXELS_PER_THREAD"), PIXELS_PER_THREAD);
 	}
 };
 
@@ -261,11 +265,11 @@ void FComputeShaderManager::Draw_RenderThread(const FShaderExecutionParameters& 
 		FIntVector(
 			FMath::DivideAndRoundUp(
 				ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.X,
-				NUM_THREADS_PER_GROUP_DIMENSION
+				NUM_THREADS_PER_GROUP_DIMENSION * PIXELS_PER_THREAD
 			),
 			FMath::DivideAndRoundUp(
 				ExecutionParameters.CachedComputeShaderParameters.CachedRenderTargetSize.Y,
-				NUM_THREADS_PER_GROUP_DIMENSION
+				NUM_THREADS_PER_GROUP_DIMENSION * PIXELS_PER_THREAD
 			),
 			NUM_THREADS_FOR_Z_DIMENSION
 		)
