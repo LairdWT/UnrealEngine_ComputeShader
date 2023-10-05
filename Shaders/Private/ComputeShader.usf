@@ -35,14 +35,22 @@ float3 HSVtoRGB(float h, float s, float v)
     return col + m;
 }
 
+float3 RepeatDomain(float3 pos, float repeatSize)
+{
+    return frac(pos / repeatSize) * repeatSize - 0.5 * repeatSize;
+}
+
 float DE(float3 pos, out int iterations, out float3 lastZ, out float minDistToTrap)
 {
+    const float DOMAIN_SIZE = 3.0;  // Control the repetition size
+    pos = RepeatDomain(pos, DOMAIN_SIZE);  // Apply domain repetition
+
     float powerTimeModulation = 8.0 + 3.0 * sin(0.25 * Range);
     const float POWER = powerTimeModulation;
     float3 z = pos;
     float dr = 1.0;
     float r = 0.0;
-    const int MAX_ITERATIONS = 256;
+    const int MAX_ITERATIONS = 128;
     minDistToTrap = 1000.0;
 
     for(int i = 0; i < MAX_ITERATIONS; i++)
@@ -120,12 +128,12 @@ void MainComputeShader(uint3 DTid : SV_DispatchThreadID)
                     (DTid.x / TextureSize.x - 0.5) * right + 
                     (DTid.y / TextureSize.y - 0.5) * up);
 
-    const int MAX_RAY_STEPS = 256;
+    const int MAX_RAY_STEPS = 128;
     const float MIN_DIST = 0.0025;
     const float MAX_DIST = 512.0;
     float depth = 0.1;
 
-    float minDistToTrap = 10.0; 
+    float minDistToTrap = 100.0; 
     float3 lastZ;
 
     for(int i = 0; i < MAX_RAY_STEPS; i++)
